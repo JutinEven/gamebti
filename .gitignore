@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+
+# ENV - CRITICAL: API keys must NOT be committed
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+.next/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+/tmp/
+test_reply*.txt
+
+# Cloudflared
+config.yml
+config.yaml
+
+# Test outputs & debug files
+bili*.txt
+elden.txt
+final*.txt
+hallucination_test.txt
+result.txt

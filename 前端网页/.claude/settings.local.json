@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(npm --version)",
+      "Bash(npx next *)",
+      "Bash(NODE_OPTIONS=\"--no-experimental-detect-module\" npx next build --no-lint)",
+      "Bash(node -e \"const fs = require\\('fs'\\); const p = 'src/app/api/chat/route.ts'; console.log\\('isFile:', fs.statSync\\(p\\).isFile\\(\\)\\); console.log\\('isDirectory:', fs.statSync\\(p\\).isDirectory\\(\\)\\); try { console.log\\('readlink:', fs.readlinkSync\\(p\\)\\); } catch\\(e\\) { console.log\\('readlink error:', e.code, e.message\\); }\")",
+      "Bash(node *)",
+      "Read(//c/Program Files/**)",
+      "Bash(where node *)",
+      "Bash(NODE_OPTIONS=\"--require ./readlink-patch.js\" node node_modules/next/dist/bin/next build --turbo)",
+      "Bash(NODE_OPTIONS=\"--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js\" node node_modules/next/dist/bin/next build --turbo)",
+      "Bash(NODE_OPTIONS=\"--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js\" node -e \"const cp = require\\('child_process'\\); const result = cp.spawnSync\\('node', ['-e', 'const fs=require\\(\\\\\"fs\\\\\"\\); try{fs.readlinkSync\\(\\\\\"node_modules/styled-jsx/style.js\\\\\"\\)}catch\\(e\\){console.log\\(e.code\\)}']\\); console.log\\('child:', result.stdout.toString\\(\\).trim\\(\\)\\);\")",
+      "Bash(NODE_OPTIONS='--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js' node -e ' *)",
+      "Bash(NODE_OPTIONS=\"--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js\" node node_modules/next/dist/bin/next build)",
+      "Bash(NODE_OPTIONS=\"--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js\" node *)",
+      "Bash(export NODE_OPTIONS=\"--require D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent网页/readlink-patch.js\")"
+    ]
+  }
+}
