@@ -1,0 +1,25 @@
+# Render Blueprint — 自动化部署配置
+# Render 会自动检测此文件并创建 Web Service
+
+services:
+  - type: web
+    name: gamebti-agent
+    env: python
+    region: singapore  # 新加坡节点，对中国用户延迟最低
+    plan: free         # 免费套餐
+    rootDir: Agent
+    buildCommand: |
+      pip install uv
+      uv sync
+    startCommand: uv run python src/main.py -m http -p $PORT
+    envVars:
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: qwen-plus
+      - key: ITAD_API_KEY
+        sync: false
+      - key: PGDATABASE_URL
+        sync: false
