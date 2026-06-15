@@ -19,7 +19,7 @@ function generateId(): string {
 }
 
 /** 从回复内容提取所有情绪（按出现顺序），用于 galgame 式轮播 */
-function detectEmotionSequence(text: string): string[] {
+function detectEmotionSequence(text: string): Emotion[] {
   if (!text) return ["neutral"];
   const seq: string[] = [];
   const t = text;
