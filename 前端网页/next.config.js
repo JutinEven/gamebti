@@ -12,8 +12,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Vercel 部署时使用 standalone 模式，兼容 Electron 迁移
-  output: process.env.VERCEL ? "standalone" : undefined,
+  output: "export",
+  images: { unoptimized: true },
 };
 
 module.exports = nextConfig;

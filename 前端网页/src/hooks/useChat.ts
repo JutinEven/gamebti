@@ -125,14 +125,21 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
       setCharacterState("thinking");
 
       try {
-        const response = await fetch("/api/chat", {
+        // 构建 OpenAI 格式请求
+        const msgs = [{ role: "user", content: trimmed }];
+        const body: Record<string, unknown> = {
+          model: "gamebti",
+          messages: msgs,
+          stream: false,
+          session_id: conversationIdRef.current || undefined,
+        };
+        if (fileContext) body.file_context = fileContext;
+        const agentBase = process.env.NEXT_PUBLIC_AGENT_BASE_URL || "";
+
+        const response = await fetch(`${agentBase}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: trimmed,
-            conversationId: conversationIdRef.current,
-            fileContext: fileContext,
-          }),
+          body: JSON.stringify(body),
         });
 
         if (!response.ok) {
@@ -141,21 +148,24 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
         }
 
         const data = await response.json();
+        // Agent 返回 OpenAI 格式: { choices: [{ message: { content: "..." } }], conversationId }
+        const reply = data.choices?.[0]?.message?.content || "";
 
         // 更新会话ID
         if (data.conversationId) {
           conversationIdRef.current = data.conversationId;
+        } else if (data.session_id) {
+          conversationIdRef.current = data.session_id;
         }
 
         // 更新角色状态 — galgame 式情绪轮播
         if (data.emotion) {
           setEmotion(data.emotion);
-        } else if (data.reply) {
-          const seq = detectEmotionSequence(data.reply);
+        } else if (reply) {
+          const seq = detectEmotionSequence(reply);
           if (seq.length === 1) {
             setEmotion(seq[0]);
           } else {
-            // 多情绪序列：每 3 秒切换一次
             let i = 0;
             setEmotion(seq[0]);
             const timer = setInterval(() => {
@@ -174,7 +184,7 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
             msg.id === assistantMessage.id
               ? {
                   ...msg,
-                  content: data.reply,
+                  content: reply,
                   status: "sent" as MessageStatus,
                   timestamp: Date.now(),
                 }

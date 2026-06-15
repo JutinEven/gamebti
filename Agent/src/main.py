@@ -32,7 +32,9 @@ from typing import Any, AsyncGenerator, Optional
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph.state import CompiledStateGraph
 
@@ -354,6 +356,20 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 静态前端（如果存在）
+import os as _os
+_FE_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "fe")
+if _os.path.isdir(_FE_DIR):
+    app.mount("/", StaticFiles(directory=_FE_DIR, html=True), name="frontend")
 
 
 # ---- OpenAI 兼容接口 (前端使用) ----

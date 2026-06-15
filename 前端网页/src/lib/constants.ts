@@ -27,7 +27,7 @@ export const COZE_CONFIG = {
 /** Agent 后端配置（自部署 LangGraph Agent） */
 export const AGENT_CONFIG = {
   /** Agent API 基础地址 */
-  BASE_URL: process.env.AGENT_BASE_URL || "http://localhost:5000",
+  BASE_URL: process.env.NEXT_PUBLIC_AGENT_BASE_URL || process.env.AGENT_BASE_URL || "",
   /** Agent 请求超时（毫秒），Agent 推理可能需要较长时间 */
   TIMEOUT: Number(process.env.AGENT_TIMEOUT) || 120000,
   /** Agent OpenAI 兼容接口路径 */

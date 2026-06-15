@@ -53,3 +53,17 @@ elden.txt
 final*.txt
 hallucination_test.txt
 result.txt
+node20/
+image/
+*_test.txt
+sts*.txt
+start-servers.sh
+stop-servers.sh
+tunnel-watchdog.sh
+停止服务.bat
+启动服务.bat
+启动服务.ps1
+deepseek_sts2.txt
+st1.txt
+st2.txt
+前端网页/public/images/*.png
