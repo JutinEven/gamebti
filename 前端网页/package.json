@@ -4,9 +4,9 @@
   "description": "Gamebti Web Companion - 游戏智能助手前端",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "dev:turbo": "next dev --turbo",
-    "build": "next build",
+    "dev": "node --require ./readlink-patch.js node_modules/.bin/next dev",
+    "dev:turbo": "node --require ./readlink-patch.js node_modules/.bin/next dev --turbo",
+    "build": "node --require ./readlink-patch.js node_modules/.bin/next build",
     "start": "next start",
     "lint": "next lint"
   },

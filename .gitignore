@@ -28,13 +28,26 @@ Thumbs.db
 # Logs & temp
 *.log
 /tmp/
-test_reply*.txt
+logs/
+
+# Runtime generated
+public_urls.txt
 
 # Cloudflared
 config.yml
 config.yaml
 
-# Test outputs & debug files
+# Test outputs & debug (catch-all)
+*_test.txt
+*_test.json
+test_*.txt
+test_*.json
+debug_*.txt
+audit*.json
+recheck*.json
+final_check.txt
+mh_price*.txt
+genshin*.txt
 bili*.txt
 elden.txt
 final*.txt

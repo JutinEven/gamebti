@@ -35,7 +35,8 @@ function generateUUID(): string {
  */
 export async function sendToAgent(
   message: string,
-  conversationId?: string
+  conversationId?: string,
+  fileContext?: string
 ): Promise<ChatResponse> {
   const sessionId = conversationId || generateUUID();
   const url = `${AGENT_CONFIG.BASE_URL}${AGENT_CONFIG.API_PATH}`;
@@ -44,15 +45,18 @@ export async function sendToAgent(
   const timeoutId = setTimeout(() => controller.abort(), AGENT_CONFIG.TIMEOUT);
 
   try {
+    const body: Record<string, unknown> = {
+      model: "gamebti",
+      messages: [{ role: "user", content: message }],
+      stream: false,
+      session_id: sessionId,
+    };
+    if (fileContext) body.file_context = fileContext;
+
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gamebti",
-        messages: [{ role: "user", content: message }],
-        stream: false,
-        session_id: sessionId,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 

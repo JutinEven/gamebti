@@ -9,17 +9,16 @@ Steam + GOG + Epic + 20+ 商店聚合折扣数据。
   POST /games/prices/v3     — 当前各商店价格 + 折扣
   POST /games/historylow/v1 — 历史最低价
 
-环境变量:
-  ITAD_API_KEY — 你的 IsThereAnyDeal API Key (免费申请)
+注：使用 curl 子进程而非 Python HTTP 库，因为 Python 的 SSL 层
+在此网络下到 ITAD 延迟 64 秒，curl 只需 1.8 秒。
 """
 
 import json
 import logging
 import os
+import subprocess
 import time
-from functools import lru_cache
-
-import httpx
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -49,61 +48,54 @@ def _api_key() -> str:
     return os.getenv("ITAD_API_KEY", "")
 
 
-def _headers() -> dict:
-    return {
-        "User-Agent": "Gamebti/1.0",
-        "Accept": "application/json",
-    }
-
-
-def _get(endpoint: str, params: dict = None) -> dict | list | None:
-    """通用 GET 请求，key 自动附加到 query string"""
+def _curl_request(method: str, endpoint: str, params: dict = None, body: list = None) -> dict | list | None:
+    """通过 curl 子进程发 HTTP 请求（绕过 Python SSL 层）"""
     if not _api_key():
-        logger.warning("ITAD_API_KEY 未设置，跳过 IsThereAnyDeal 查询")
+        logger.warning("ITAD_API_KEY 未设置")
         return None
 
-    params = params or {}
+    url = f"{BASE_URL}{endpoint}"
+    if params is None:
+        params = {}
     params["key"] = _api_key()
+    qs = urllib.parse.urlencode(params)
+    url = f"{url}?{qs}"
+
+    cmd = [
+        "curl", "-s", "--max-time", "15",
+        "-H", "User-Agent: Gamebti/1.0",
+        "-H", "Accept: application/json",
+    ]
+    if method == "POST":
+        cmd += ["-X", "POST", "-H", "Content-Type: application/json"]
+        if body:
+            cmd += ["-d", json.dumps(body, ensure_ascii=False)]
+    cmd.append(url)
 
     try:
-        r = httpx.get(
-            f"{BASE_URL}{endpoint}",
-            params=params,
-            headers=_headers(),
-            timeout=10,
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=20,
+            encoding="utf-8", errors="replace"
         )
-        if r.status_code != 200:
-            logger.warning(f"ITAD GET {endpoint}: HTTP {r.status_code}")
+        if result.returncode != 0:
+            logger.warning(f"ITAD curl 失败 ({endpoint}): {result.stderr[:100]}")
             return None
-        return r.json()
-    except Exception as e:
-        logger.warning(f"ITAD GET 失败 ({endpoint}): {e}")
-        return None
-
-
-def _post(endpoint: str, body: list, params: dict = None) -> list | None:
-    """通用 POST 请求，body 为 JSON 数组，key 附加到 query string"""
-    if not _api_key():
-        logger.warning("ITAD_API_KEY 未设置，跳过 IsThereAnyDeal 查询")
-        return None
-
-    params = params or {}
-    params["key"] = _api_key()
-
-    try:
-        r = httpx.post(
-            f"{BASE_URL}{endpoint}",
-            params=params,
-            json=body,
-            headers={**_headers(), "Content-Type": "application/json"},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            logger.warning(f"ITAD POST {endpoint}: HTTP {r.status_code}")
+        if not result.stdout.strip():
             return None
-        return r.json()
+        data = json.loads(result.stdout)
+        # HTTP 错误码在响应 JSON 中
+        if isinstance(data, dict) and data.get("status_code", 200) >= 400:
+            logger.warning(f"ITAD {endpoint}: {data.get('reason_phrase', 'error')}")
+            return None
+        return data
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ITAD curl 超时 ({endpoint})")
+        return None
+    except json.JSONDecodeError as e:
+        logger.warning(f"ITAD JSON 解析失败 ({endpoint}): {e}")
+        return None
     except Exception as e:
-        logger.warning(f"ITAD POST 失败 ({endpoint}): {e}")
+        logger.warning(f"ITAD curl 异常 ({endpoint}): {e}")
         return None
 
 
@@ -112,17 +104,13 @@ def _post(endpoint: str, body: list, params: dict = None) -> list | None:
 # ========================
 
 def search_game(title: str, limit: int = 5) -> list[dict]:
-    """
-    搜索游戏 → 返回含 id/slug/title 的游戏列表。
-
-    新版返回格式: [{id, slug, title, type, mature, assets}]
-    """
+    """搜索游戏 → 返回含 id/slug/title 的游戏列表"""
     cache_key = f"search_{title}"
     cached = _cached(cache_key)
     if cached:
         return cached
 
-    data = _get("/games/search/v1", {"title": title, "results": limit})
+    data = _curl_request("GET", "/games/search/v1", {"title": title, "results": limit})
     if not data:
         return []
 
@@ -140,21 +128,13 @@ def search_game(title: str, limit: int = 5) -> list[dict]:
 
 
 def get_price(game_id: str, country: str = "CN") -> dict | None:
-    """
-    获取游戏当前在各商店的价格和折扣。
-
-    参数:
-      game_id — 游戏 ID (来自 search_game 的 id 字段，UUID 格式)
-      country — 国家代码 (CN/US/...)
-
-    返回: {id, historyLow, deals: [{shop, price, regular, cut, drm, url, ...}]}
-    """
-    cache_key = f"price_{game_id}_{country}"
+    """获取游戏当前在各商店的价格和折扣"""
+    cache_key = f"price_{game_id}"
     cached = _cached(cache_key, PRICE_TTL)
     if cached:
         return cached
 
-    data = _post("/games/prices/v3", [game_id])
+    data = _curl_request("POST", "/games/prices/v3", body=[game_id])
     if not data or not isinstance(data, list) or not data:
         return None
 
@@ -164,21 +144,13 @@ def get_price(game_id: str, country: str = "CN") -> dict | None:
 
 
 def get_history(game_id: str, country: str = "CN") -> dict | None:
-    """
-    获取游戏历史最低价。
-
-    参数:
-      game_id — 游戏 ID (UUID 格式)
-      country — 国家代码
-
-    返回: {id, low: {shop, price, regular, cut, timestamp}}
-    """
-    cache_key = f"history_{game_id}_{country}"
+    """获取游戏历史最低价"""
+    cache_key = f"history_{game_id}"
     cached = _cached(cache_key, CACHE_TTL)
     if cached:
         return cached
 
-    data = _post("/games/historylow/v1", [game_id])
+    data = _curl_request("POST", "/games/historylow/v1", body=[game_id])
     if not data or not isinstance(data, list) or not data:
         return None
 
@@ -192,11 +164,7 @@ def get_history(game_id: str, country: str = "CN") -> dict | None:
 # ========================
 
 def query_game(query: str, country: str = "CN") -> dict | None:
-    """
-    一站式查询：搜索游戏 → 获取价格 + 史低。
-
-    返回: {game, id, slug, price, history}
-    """
+    """一站式查询：搜索游戏 → 获取价格 + 史低"""
     if not _api_key():
         return None
 
@@ -208,8 +176,8 @@ def query_game(query: str, country: str = "CN") -> dict | None:
     best = results[0]
     game_id = best["id"]
 
-    price_data = get_price(game_id, country)
-    history_data = get_history(game_id, country)
+    price_data = get_price(game_id)
+    history_data = get_history(game_id)
 
     return {
         "game": best["title"],
@@ -221,25 +189,20 @@ def query_game(query: str, country: str = "CN") -> dict | None:
 
 
 def get_deals(country: str = "CN", shop: str = "steam", limit: int = 10) -> list[dict]:
-    """
-    获取当前热门折扣列表（多游戏聚合）。
-
-    实现：搜索热门关键词 → 并行获取价格 → 聚合所有折扣。
-    """
+    """获取当前热门折扣列表（多游戏聚合）"""
     cache_key = f"deals_{country}_{shop}"
     cached = _cached(cache_key, PRICE_TTL)
     if cached:
         return cached
 
-    # 搜索热门游戏获取一批 ID
     popular = ["Elden Ring", "Cyberpunk 2077", "Baldur's Gate 3",
                "Red Dead Redemption 2", "Hogwarts Legacy"]
     all_deals = []
 
     for title in popular:
         games = search_game(title, 2)
-        for g in games[:1]:  # 每款只取第一个
-            price_data = get_price(g["id"], country)
+        for g in games[:1]:
+            price_data = get_price(g["id"])
             if price_data:
                 for d in (price_data.get("deals") or [])[:3]:
                     d["_game"] = g["title"]
@@ -274,7 +237,6 @@ def _parse_price(item: dict) -> dict:
     """解析 /games/prices/v3 的单个游戏价格数据"""
     result = {"id": item.get("id", ""), "deals": [], "history_low": {}}
 
-    # 史低
     hl = item.get("historyLow") or {}
     result["history_low"] = {
         "all_time": _fmt_price(hl.get("all")),
@@ -282,7 +244,6 @@ def _parse_price(item: dict) -> dict:
         "3months": _fmt_price(hl.get("m3")),
     }
 
-    # 当前折扣
     for d in (item.get("deals") or [])[:10]:
         shop = d.get("shop", {})
         price = d.get("price", {})

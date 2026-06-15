@@ -1,0 +1,28 @@
+version: "3.8"
+services:
+  agent:
+    build: ./Agent
+    ports:
+      - "5001:5000"
+    env_file:
+      - ./Agent/.env
+    restart: unless-stopped
+
+  frontend:
+    build: ./前端网页
+    ports:
+      - "3000:3000"
+    environment:
+      - AGENT_BASE_URL=http://agent:5000
+      - AGENT_PROVIDER=agent
+      - COZE_MOCK_MODE=false
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --url http://frontend:3000 --no-autoupdate
+    depends_on:
+      - frontend
+    restart: unless-stopped

@@ -25,7 +25,6 @@ import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain.tools import tool
-from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
@@ -33,35 +32,107 @@ logger = logging.getLogger(__name__)
 # 配置
 # ========================
 
-MAX_WEB = 6
-STEAM_TTL = 300       # Steam 缓存5分钟
-DEALS_TTL = 600       # 折扣缓存10分钟
-TIMEOUT = 10
-DDG_RETRIES = 2
+MAX_WEB = 5           # Bing 快速，可以多取几条
+STEAM_TTL = 300
+DEALS_TTL = 600
+TIMEOUT = 8
+SEARCH_TIMEOUT = 8    # Bing 搜索超时
+
+# ========================
+# 任务1: TRUST_TIERS — 信源等级（T0 > T1 > T2 > T3）
+# ========================
+TRUST_TIERS = {
+    "steampowered.com":     "T0_OFFICIAL",
+    "store.steampowered":   "T0_OFFICIAL",
+    "playstation.com":      "T0_OFFICIAL",
+    "xbox.com":             "T0_OFFICIAL",
+    "nintendo.com":         "T0_OFFICIAL",
+    "epicgames.com":        "T0_OFFICIAL",
+    "gog.com":              "T0_OFFICIAL",
+    "humblebundle.com":     "T0_OFFICIAL",
+    "fromsoftware":         "T0_OFFICIAL",
+    "capcom.com":           "T0_OFFICIAL",
+    "bandainamco":          "T0_OFFICIAL",
+    "square-enix":          "T0_OFFICIAL",
+    "ubisoft.com":          "T0_OFFICIAL",
+    "ea.com":               "T0_OFFICIAL",
+    "activision":           "T0_OFFICIAL",
+    "blizzard.com":         "T0_OFFICIAL",
+    "bethesda":             "T0_OFFICIAL",
+    "rockstargames":        "T0_OFFICIAL",
+    "cdprojektred":         "T0_OFFICIAL",
+    "larian.com":           "T0_OFFICIAL",
+    "pocketpair":           "T0_OFFICIAL",
+    "gamescience":          "T0_OFFICIAL",
+    "hoyoverse.com":        "T0_OFFICIAL",
+    "mihoyo.com":           "T0_OFFICIAL",
+    "kurogames.com":        "T0_OFFICIAL",
+    "hypergryph.com":       "T0_OFFICIAL",
+    "igdb.com":             "T1_DATABASE",
+    "rawg.io":              "T1_DATABASE",
+    "metacritic.com":       "T1_DATABASE",
+    "ign.com":              "T2_MEDIA",
+    "gamespot.com":         "T2_MEDIA",
+    "pcgamer.com":          "T2_MEDIA",
+    "eurogamer.net":        "T2_MEDIA",
+    "gamersky.com":         "T2_MEDIA",
+    "3dmgame.com":          "T2_MEDIA",
+    "reddit.com":           "T3_COMMUNITY",
+    "steamcommunity.com":   "T3_COMMUNITY",
+}
+TRUST_ORDER = {"T0_OFFICIAL": 0, "T1_DATABASE": 1, "T2_MEDIA": 2, "T3_COMMUNITY": 3}
+
+# ========================
+# 游戏别名映射（中文→英文官方名）
+# ========================
 NICKNAME_MAP: dict[str, str] = {
-    "老头环": "Elden Ring", "大表哥": "Red Dead Redemption 2",
-    "大表哥2": "Red Dead Redemption 2", "给他爱": "GTA V",
-    "给他爱5": "Grand Theft Auto V", "猛汉": "Monster Hunter",
-    "猛汉王": "Monster Hunter World", "怪猎荒野": "Monster Hunter Wilds",
-    "怪猎世界": "Monster Hunter World", "怪猎崛起": "Monster Hunter Rise",
-    "野炊": "The Legend of Zelda: Breath of the Wild",
-    "王泪": "The Legend of Zelda: Tears of the Kingdom",
-    "魂3": "Dark Souls III", "只狼": "Sekiro: Shadows Die Twice",
+    # 怪物猎人系列
+    "怪物猎人荒野": "Monster Hunter Wilds", "怪猎荒野": "Monster Hunter Wilds",
+    "怪物猎人世界": "Monster Hunter World", "怪猎世界": "Monster Hunter World",
+    "怪物猎人崛起": "Monster Hunter Rise", "怪猎崛起": "Monster Hunter Rise",
+    "猛汉王": "Monster Hunter World", "猛汉": "Monster Hunter",
+    # 艾尔登法环
+    "老头环": "Elden Ring", "艾尔登法环": "Elden Ring", "法环": "Elden Ring",
+    # 博德之门
+    "博德3": "Baldur's Gate 3", "博德之门3": "Baldur's Gate 3",
+    "博德之门": "Baldur's Gate", "bg3": "Baldur's Gate 3",
+    # Rockstar
+    "大表哥": "Red Dead Redemption 2", "大表哥2": "Red Dead Redemption 2",
+    "给他爱": "GTA V", "给他爱5": "Grand Theft Auto V", "gta5": "Grand Theft Auto V",
+    # 热门单机
+    "黑神话": "Black Myth: Wukong", "黑神话悟空": "Black Myth: Wukong",
+    "赛博朋克": "Cyberpunk 2077", "2077": "Cyberpunk 2077",
+    "只狼": "Sekiro: Shadows Die Twice",
     "鬼泣5": "Devil May Cry 5", "巫师3": "The Witcher 3: Wild Hunt",
-    "赛博朋克": "Cyberpunk 2077", "原神": "Genshin Impact",
-    "崩铁": "Honkai: Star Rail", "黑神话": "Black Myth: Wukong",
-    "丝之歌": "Hollow Knight: Silksong", "空洞骑士": "Hollow Knight",
+    "魂3": "Dark Souls III", "空洞骑士": "Hollow Knight",
+    "丝之歌": "Hollow Knight: Silksong",
     "星际战甲": "Warframe", "命运2": "Destiny 2",
-    "彩六": "Rainbow Six Siege", "APEX": "Apex Legends",
-    "瓦罗": "VALORANT", "LOL": "League of Legends",
     "战神": "God of War", "地平线": "Horizon",
     "美末": "The Last of Us", "P5": "Persona 5",
-    "如龙": "Yakuza", "生化": "Resident Evil",
-    "FF": "Final Fantasy",
+    "如龙": "Yakuza", "生化": "Resident Evil", "FF": "Final Fantasy",
+    # 热门网游/手游
+    "原神": "Genshin Impact", "崩铁": "Honkai: Star Rail",
+    "星穹铁道": "Honkai: Star Rail", "绝区零": "Zenless Zone Zero",
+    "鸣潮": "Wuthering Waves", "明日方舟": "Arknights",
+    "幻兽帕鲁": "Palworld",
+    "彩六": "Rainbow Six Siege", "APEX": "Apex Legends",
+    "瓦罗": "VALORANT", "LOL": "League of Legends",
+    "野炊": "The Legend of Zelda: Breath of the Wild",
+    "王泪": "The Legend of Zelda: Tears of the Kingdom",
+    # 任天堂
+    "塞尔达": "The Legend of Zelda", "宝可梦": "Pokemon",
+    # 其他
+    "星露谷": "Stardew Valley", "星露谷物语": "Stardew Valley",
+    "荒野之息": "Breath of the Wild", "王国之泪": "Tears of the Kingdom",
+    # Valve + 新兴游戏
+    "死锁": "Deadlock", "deadlock": "Deadlock", "DeadLock": "Deadlock",
+    # 杀戮尖塔
+    "杀戮尖塔2": "Slay the Spire 2", "杀戮尖塔": "Slay the Spire",
+    "尖塔": "Slay the Spire",
 }
 DISCOUNT_KW = ["折扣", "打折", "优惠", "促销", "特惠", "史低",
                "降价", "discount", "sale", "榜单", "排行"]
-PRICE_KW = ["价格", "多少钱", "price", "售价"]
+PRICE_KW = ["价格", "多少钱", "price", "售价", "发售", "上线了", "出了吗", "上架"]
 
 # ========================
 # 缓存
@@ -166,7 +237,7 @@ def _steam_specials() -> list[dict]:
 
 
 def _search_steam_game(name: str) -> dict | None:
-    """搜索特定游戏"""
+    """搜索特定游戏，返回 Steam 商店页完整数据"""
     data = _fetch(
         "https://store.steampowered.com/api/storesearch/"
         f"?term={urllib.parse.quote(name)}&l=zh&cc=cn"
@@ -186,13 +257,27 @@ def _search_steam_game(name: str) -> dict | None:
     if not g:
         return None
     p = g.get("price_overview", {})
+    release = g.get("release_date", {})
+    # 判断发售状态
+    is_released = not release.get("coming_soon", False)
     return {
         "name": g.get("name", ""),
-        "final_price": p.get("final_formatted", "免费"),
+        "steam_appid": app_id,
+        "final_price": p.get("final_formatted", "免费" if g.get("is_free") else "N/A"),
         "original_price": p.get("initial_formatted", ""),
         "discount_percent": p.get("discount_percent", 0),
-        "description": str(g.get("short_description", ""))[:200],
-        "release_date": g.get("release_date", {}).get("date", ""),
+        "description": str(g.get("short_description", ""))[:300],
+        "release_date": release.get("date", ""),
+        "is_released": is_released,
+        "coming_soon": release.get("coming_soon", False),
+        "developers": g.get("developers", [])[:3],
+        "publishers": g.get("publishers", [])[:3],
+        "platforms": {k: v for k, v in [
+            ("windows", g.get("platforms", {}).get("windows", False)),
+            ("mac", g.get("platforms", {}).get("mac", False)),
+            ("linux", g.get("platforms", {}).get("linux", False)),
+        ] if v},
+        "genres": [genre.get("description", "") for genre in g.get("genres", [])[:5]],
         "url": f"https://store.steampowered.com/app/{app_id}",
     }
 
@@ -241,18 +326,39 @@ def _search_web(query: str) -> list[dict]:
     return _rank_results(results)
 
 
-def _ddg_search(query: str, max_results: int = MAX_WEB) -> list:
-    """底层 DDG 搜索，带重试"""
-    for attempt in range(DDG_RETRIES + 1):
-        try:
-            ddg = DDGS()
-            results = list(ddg.text(query, max_results=max_results))
-            if results:
-                return results
-        except Exception as e:
-            if attempt < DDG_RETRIES:
-                time.sleep(0.5 * (attempt + 1))
-    return []
+def _bing_search(query: str, max_results: int = MAX_WEB) -> list:
+    """Bing 搜索（0.1秒 vs DDGS 30秒）。返回 [{title, href, body}]"""
+    import re
+    try:
+        encoded = urllib.parse.quote(query)
+        url = f"https://www.bing.com/search?q={encoded}&count={max_results}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        })
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+
+        results = []
+        # 解析 Bing 搜索结果（提取标题、链接、摘要）
+        # Bing 的搜索结果在 <li class="b_algo"> 中
+        blocks = re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL)
+        for block in blocks[:max_results]:
+            title_m = re.search(r'<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', block, re.DOTALL)
+            snippet_m = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+            if title_m:
+                href = title_m.group(1)
+                title = re.sub(r'<[^>]+>', '', title_m.group(2)).strip()
+                snippet = re.sub(r'<[^>]+>', '', snippet_m.group(1) if snippet_m else '').strip()
+                results.append({"title": title, "href": href, "body": snippet[:300]})
+        return results
+    except Exception as e:
+        logger.debug(f"Bing search failed: {e}")
+        return []
+
+# 保留 DDGS 作为备份（Bing 失败时降级）
+_ddg_search = _bing_search
 
 
 def _get_bilibili_uid(query: str) -> str | None:
@@ -278,6 +384,12 @@ def _get_bilibili_uid(query: str) -> str | None:
         "尘白禁区": ("3493095719732591", "space.bilibili.com/3493095719732591"),
         "无期迷途": ("1861995594", "space.bilibili.com/1861995594"),
     }
+    # AAA 厂商官方号
+    if any(k in q for k in ["怪猎", "怪物猎人", "monster hunter", "mhw", "capcom"]):
+        return "706772479"  # Capcom 官方
+    if any(k in q for k in ["艾尔登法环", "elden ring", "黑暗之魂", "fromsoftware", "只狼"]):
+        return "342022727"  # FromSoftware 官方
+
     for game, (uid, space_url) in mapping.items():
         if game in q:
             return uid
@@ -312,93 +424,28 @@ def _get_bilibili_space_url(query: str) -> str | None:
             return url
     return None
 
-    for attempt in range(DDG_RETRIES + 1):
-        try:
-            ddg = DDGS()
-            results = []
-            for r in ddg.text(search_q, max_results=MAX_WEB):
-                url = r.get("href", "")
-                results.append({
-                    "title": r.get("title", ""),
-                    "url": url,
-                    "snippet": (r.get("body") or "")[:250],
-                    "source": _classify_source(url),
-                    "freshness": _check_freshness(r.get("body", "")),
-                })
-            if results:
-                return _rank_results(results)
-        except Exception as e:
-            if attempt < DDG_RETRIES:
-                time.sleep(0.5 * (attempt + 1))
-    return []
-
-
-def _get_official_sources(query: str) -> list[str]:
-    """根据查询内容返回官方信息源，二游优先 Bilibili 官方号"""
-    sources = []
-    q = query.lower()
-
-    # Bilibili 官方号映射（二次元手游核心信源）
-    bilibili_official: dict[str, str] = {
-        "原神": "space.bilibili.com/401742377",
-        "genshin": "space.bilibili.com/401742377",
-        "崩坏": "space.bilibili.com/1340190821",
-        "星穹铁道": "space.bilibili.com/1340190821",
-        "honkai": "space.bilibili.com/1340190821",
-        "绝区零": "space.bilibili.com/1636375920",
-        "zzz": "space.bilibili.com/1636375920",
-        "鸣潮": "space.bilibili.com/354136791",
-        "wuthering": "space.bilibili.com/354136791",
-        "明日方舟": "space.bilibili.com/161775301",
-        "arknights": "space.bilibili.com/161775301",
-        "崩坏3": "space.bilibili.com/27534330",
-        "战双": "space.bilibili.com/10165841",
-        "蔚蓝档案": "space.bilibili.com/16535831",
-        "碧蓝航线": "space.bilibili.com/8352461",
-        "少女前线": "space.bilibili.com/1523727",
-        "重返未来1999": "space.bilibili.com/3493130552012982",
-        "无期迷途": "space.bilibili.com/1861995594",
-        "白夜极光": "space.bilibili.com/69991609",
-        "尘白禁区": "space.bilibili.com/3493095719732591",
-    }
-
-    for game, bili_uid in bilibili_official.items():
-        if game in q:
-            sources.append(f"site:{bili_uid}")
-            break  # 只加最匹配的那个
-
-    # 米哈游系列
-    if any(k in q for k in ["原神", "genshin", "崩坏", "honkai", "星穹铁道", "绝区零", "zzz"]):
-        sources.extend(["site:genshin.hoyoverse.com", "site:hsr.hoyoverse.com",
-                        "site:zenless.hoyoverse.com", "site:bbs.mihoyo.com"])
-
-    # 腾讯/网易等
-    if any(k in q for k in ["王者荣耀", "和平精英", "lol", "英雄联盟"]):
-        sources.extend(["site:pvp.qq.com", "site:lol.qq.com"])
-
-    # 通用：Steam + Wikipedia
-    sources.extend(["site:steampowered.com", "site:wikipedia.org"])
-
-    return sources[:3]
-
 
 def _classify_source(url: str) -> str:
-    """根据 URL 对来源分级。Bilibili 官方号 = T1"""
+    """按 TRUST_TIERS 分级：T0官方>T1数据库>T2媒体>T3社区"""
+    tier = _get_trust_tier(url)
     u = url.lower()
-    # T1: 官方渠道
-    if any(d in u for d in ["hoyoverse.com", "mihoyo.com", "steampowered.com",
-                              "playstation.com", "xbox.com", "nintendo.com",
-                              "epicgames.com", "wikipedia.org"]):
-        return "T1-官方/权威"
-    # Bilibili 官方号 = T1（游戏厂商直接发布）
-    if "space.bilibili.com" in u:
-        return "T1-Bilibili官方号"
-    if any(d in u for d in ["ign.com", "gamespot.com", "pcgamer.com",
-                              "nga.cn", "gamersky.com"]):
-        return "T2-知名媒体/社区"
-    if "bilibili.com" in u:
-        return "T2-Bilibili"
-    return "T3-一般来源"
+    if "space.bilibili.com" in u and "/video/" not in u:
+        tier = "T0_OFFICIAL"  # B站官方号空间 = T0
+    return tier
+
+
+def _rank_results(results: list[dict]) -> list[dict]:
+    """按 TRUST_TIERS 排序：T0 > T1 > T2 > T3。有 T0/T1 时丢弃 T3"""
+    sorted_results = sorted(results, key=lambda r: TRUST_ORDER.get(
+        r.get("source", "T3_COMMUNITY"), 3))
+
+    # 有 T0/T1 结果时丢弃 T3 社区源
+    high_trust = [r for r in sorted_results
+                  if r.get("source", "").startswith(("T0", "T1"))]
+    if len(high_trust) >= 1:
+        return [r for r in sorted_results
+                if not r.get("source", "").startswith("T3")]
+    return sorted_results
 
 
 def _check_freshness(text: str) -> str:
@@ -424,9 +471,194 @@ def _check_freshness(text: str) -> str:
 
 
 def _rank_results(results: list[dict]) -> list[dict]:
-    """按来源可信度排序：T1 > T2 > T3"""
-    order = {"T1-官方/权威": 0, "T2-知名媒体/社区": 1, "T3-一般来源": 2}
-    return sorted(results, key=lambda r: order.get(r.get("source", "T3"), 2))
+    """按来源可信度排序：T1 > T2 > T3。有T1/T2时完全丢弃T3。"""
+    order = {"T1-官方/权威": 0, "T1-Bilibili官方号": 1,
+             "T2-知名媒体/社区": 2, "T2-Bilibili": 3,
+             "T3-自媒体/论坛": 4, "T3-一般来源": 5}
+    sorted_results = sorted(results, key=lambda r: order.get(r.get("source", "T3"), 5))
+
+    # 有 T1/T2 结果时，完全丢弃 T3（自媒体/营销号/论坛不可信）
+    t1_t2 = [r for r in sorted_results if r.get("source", "").startswith(("T1", "T2"))]
+    t3 = [r for r in sorted_results if r.get("source", "").startswith("T3")]
+    if len(t1_t2) >= 1:
+        return t1_t2  # 有官方/媒体源就完全不用 T3
+    return t3[:2]  # 实在没数据时最多保留 2 条 T3 兜底
+
+# ========================
+# 任务3: 时间衰减 — 发售类查询丢弃90天以上结果
+# ========================
+RELEASE_KW = ["发售", "上线", "出了吗", "上架", "release", "launch", "available", "coming soon"]
+
+def _check_time_decay(snippet: str, is_release_query: bool = False) -> tuple[bool, str]:
+    """检查搜索结果时效性。发售查询：>90天直接丢弃。"""
+    import re
+    from datetime import datetime, timedelta
+
+    m = re.search(r'(\d{4})[年/-](\d{1,2})[月/-]?(\d{1,2})?', snippet)
+    if not m:
+        return (False, "未知时效")
+
+    year, month = int(m.group(1)), int(m.group(2))
+    try:
+        day = int(m.group(3)) if m.group(3) else 1
+        d = datetime(year, month, day)
+    except ValueError:
+        return (False, "未知时效")
+
+    age = (datetime.now() - d).days
+    cutoff = 90 if is_release_query else 180
+
+    if age > cutoff:
+        return (True, f"过期丢弃({age}天前)") if is_release_query else (True, f"降权({age}天前)")
+    if age > 60:
+        return (False, f"较旧({age}天前)")
+    return (False, f"近期({age}天前)")
+
+# ========================
+# 任务4: 公告型新闻识别 — T0事实锁定时忽略旧公告
+# ========================
+ANNOUNCEMENT_KW = [
+    "announced", "revealed", "trailer", "preview", "teaser",
+    "TGS", "gamescom", "E3", "showcase", "direct", "state of play",
+    "公布", "预告", "宣传片", "发布会", "演示", "首曝", "曝光",
+]
+
+def _is_announcement(text: str) -> bool:
+    """判断内容是否为公告/预告型（非事实型）"""
+    return any(kw.lower() in text.lower() for kw in ANNOUNCEMENT_KW)
+
+# ========================
+# 任务2: search_release_truth — 发售状态专项搜索
+# ========================
+RELEASE_CONFIRMED_KW = [
+    "available now", "released", "out now", "launch", "已发售",
+    "正式发售", "已上线", "现已推出", "现已登陆", "now available",
+    "release date", "发售日期", "发售日",
+]
+RELEASE_PENDING_KW = [
+    "coming soon", "wishlist now", "planned release", "to be released",
+    "即将推出", "即将发售", "预定", "预购", "尚未发售",
+    "未公布", "TBA", "TBD", "待定",
+]
+
+def search_release_truth(game_name: str) -> dict:
+    """
+    专项查询游戏发售状态。返回 {released, confidence, evidence, sources}
+
+    优先级: T0官方源 > T1数据库 > T2媒体。T0锁定后旧新闻不可覆盖。
+    """
+    results = {
+        "released": None,        # True/False/None(未知)
+        "confidence": "low",
+        "evidence": [],
+        "sources": [],
+        "release_date": None,
+    }
+    release_locked = False
+
+    # Phase 1: 搜 T0 官方源
+    t0_queries = [
+        f"{game_name} Steam",
+        f"{game_name} official release date",
+        f"{game_name} site:steampowered.com",
+    ]
+    t0_results = []
+    for q in t0_queries:
+        for r in _ddg_search(q, max_results=3):
+            url = r.get("href", "")
+            tier = _get_trust_tier(url)
+            if tier == "T0_OFFICIAL":
+                expired, label = _check_time_decay(r.get("body", ""), is_release_query=True)
+                if expired:
+                    continue  # >90天直接丢弃
+                r["_trust_tier"] = tier
+                r["_time_label"] = label
+                r["_is_announcement"] = _is_announcement(r.get("body", ""))
+                t0_results.append(r)
+
+    # Phase 2: 分析 T0 结果
+    for r in t0_results:
+        text = (r.get("title", "") + " " + r.get("body", ""))
+        is_ann = r.get("_is_announcement", False)
+
+        # 检查已发售关键词
+        if any(kw.lower() in text.lower() for kw in RELEASE_CONFIRMED_KW):
+            if not is_ann:  # 不是旧公告 → 可信
+                results["released"] = True
+                results["confidence"] = "high"
+                results["evidence"].append(f"T0确认已发售: {r.get('title','')[:80]}")
+                results["sources"].append(r.get("href", ""))
+                release_locked = True
+                # 提取发售日期
+                import re
+                dm = re.search(r'(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})', text)
+                if dm:
+                    results["release_date"] = f"{dm.group(1)}年{dm.group(2)}月{dm.group(3)}日"
+                break  # T0 锁定，不再看其他
+
+        # 检查未发售关键词
+        if any(kw.lower() in text.lower() for kw in RELEASE_PENDING_KW):
+            if is_ann:
+                continue  # 公告型未发售 = 旧新闻，跳过
+            # 真正未发售
+            if not release_locked:
+                results["released"] = False
+                results["confidence"] = "medium"
+                results["evidence"].append(f"T0确认未发售: {r.get('title','')[:80]}")
+
+    # Phase 3: 如果 T0 未锁定，补充 T1+T2
+    if not release_locked and not results["released"]:
+        extra_queries = [game_name]
+        for q in extra_queries:
+            for r in _ddg_search(q, max_results=4):
+                url = r.get("href", "")
+                tier = _get_trust_tier(url)
+                if tier.startswith("T0"):
+                    continue  # 已处理
+                text = (r.get("title", "") + " " + r.get("body", ""))
+                if any(kw.lower() in text.lower() for kw in RELEASE_CONFIRMED_KW):
+                    expired, _ = _check_time_decay(r.get("body", ""), is_release_query=True)
+                    if expired:
+                        continue
+                    if not _is_announcement(text):
+                        results["released"] = True
+                        results["confidence"] = "medium" if tier.startswith("T1") else "low"
+                        results["evidence"].append(f"{tier}确认已发售: {r.get('title','')[:80]}")
+                        results["sources"].append(url)
+                        break
+            if results["released"]:
+                break
+
+    # Phase 4: ITAD 交叉验证 — 有价格 = 已发售
+    if results["released"] is None or results["released"] is False:
+        try:
+            from tools.itad_client import search_game as itad_search
+            itad_results = itad_search(game_name, 2)
+            if itad_results:
+                # ITAD 返回价格数据 → 游戏已发售
+                results["released"] = True
+                results["confidence"] = "high"
+                results["evidence"].append(f"ITAD确认已发售（多商店有实时价格）: {itad_results[0].get('title','')}")
+                results["sources"].append("https://isthereanydeal.com")
+                release_locked = True
+        except Exception:
+            pass
+
+    return results
+
+
+def _get_trust_tier(url: str) -> str:
+    """根据 URL 返回 TRUST_TIERS 等级"""
+    u = url.lower()
+    for domain, tier in TRUST_TIERS.items():
+        if domain in u:
+            return tier
+    # 兜底
+    if "bilibili.com" in u:
+        return "T2_MEDIA" if "/video/" in u else "T1_DATABASE"
+    if any(d in u for d in ["wikipedia.org", "zh.wikipedia.org"]):
+        return "T1_DATABASE"
+    return "T3_COMMUNITY"
 
 # ========================
 # 昵称解析
@@ -436,14 +668,29 @@ def _resolve_name(q: str) -> tuple[str | None, str | None]:
     for nick, official in NICKNAME_MAP.items():
         if nick in qs:
             return (nick, official)
-    # 直接提取
+
+    # 先尝试提取英文游戏名（大写开头单词，如 Deadlock, Valorant）
+    import re
+    eng_matches = re.findall(r'\b([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,})?)\b', qs)
+    if eng_matches:
+        # 过滤掉常见非游戏词
+        skip_words = {"Steam", "Xbox", "PlayStation", "Nintendo", "Epic", "GOG", "ITAD", "IGN", "GameSpot", "Windows", "Linux", "MacOS", "Intel", "AMD", "Nvidia", "Bilibili", "YouTube", "Twitter"}
+        for m in eng_matches:
+            if m not in skip_words:
+                return (m, m)  # 直接作为英文名
+
+    # 中文名提取：剥离前缀和修饰词
     name = qs
     for w in ["查询", "搜索", "帮我查", "请问", "今天", "昨天",
-              "本周", "热门", "最新", "推荐"]:
+              "本周", "热门", "最新", "推荐", "游戏名", "这个游戏",
+              "这款游戏", "新上线", "新出的", "最近"]:
         name = name.replace(w, "")
     for w in ["的价格", "多少钱", "价格", "打折吗", "折扣", "优惠",
-              "促销", "榜单", "排行", "怎么样", "好玩吗", "值得买吗"]:
+              "促销", "榜单", "排行", "怎么样", "好玩吗", "值得买吗",
+              "Steam", "steam", "新上线", "上线了", "发售", "出了吗"]:
         name = name.replace(w, "")
+    # 去除标点
+    name = re.sub(r'[，,。．、！!？?：:；;]', '', name)
     name = name.strip()
     return (name, None) if 2 < len(name) < 40 else (None, None)
 
@@ -453,6 +700,7 @@ def _resolve_name(q: str) -> tuple[str | None, str | None]:
 def _has(q: str, keywords: list[str]) -> bool:
     return any(k in q.lower() for k in keywords)
 
+# 推荐类关键词（"推荐解谜游戏"、"有什么好玩的"）
 # ========================
 # 数据源 4: IsThereAnyDeal (主力)
 # ========================
@@ -490,20 +738,30 @@ def _search_itad(query: str) -> dict | None:
 def game_search(query: str) -> str:
     """
     搜索游戏信息。并行查询 ITAD + Steam + CheapShark + DuckDuckGo。
-    ITAD 作为主力数据源（跨商店聚合，稳定可靠）。
-    返回结构: {success, itad, steam_specials, cheapshark_deals, steam_info, web_results, note}
+    发售类查询走 search_release_truth 专项通道。
+    返回结构: {success, itad, steam_specials, cheapshark_deals, steam_info, web_results, note, release_truth}
     """
     logger.info(f"🔍 '{query[:60]}'")
 
     cn, en = _resolve_name(query)
     has_discount = _has(query, DISCOUNT_KW)
     has_price = _has(query, PRICE_KW) or has_discount
+    has_game_name = bool(en or cn)  # 能解析出游戏名就搜
+
+    # 任务5: 发售状态意图检测 → 走专项通道
+    is_release_query = _has(query, RELEASE_KW)
+    release_truth = None
+    if is_release_query:
+        release_name = en or cn or query
+        release_truth = search_release_truth(release_name)
+        logger.info(f"发售真相: released={release_truth['released']} conf={release_truth['confidence']}")
 
     result = {
         "query": query, "success": False,
         "itad": None,
         "steam_specials": None, "cheapshark_deals": None,
         "steam_info": None, "web_results": [], "note": "",
+        "release_truth": release_truth,
     }
 
     # 并行执行所有搜索
@@ -514,29 +772,29 @@ def game_search(query: str) -> str:
             futures["steam_specials"] = pool.submit(_steam_specials)
             futures["cheapshark"] = pool.submit(_cheapshark_deals)
 
-        # 网页搜索（通用）
+        # 网页搜索（通用）— Bing 0.1秒，始终执行
         sq = en or query
         futures["web"] = pool.submit(_search_web, sq)
 
-        # 价格查询：DDG 精准搜 Steam 商店
-        if has_price:
-            price_q = f"{query} site:store.steampowered.com"
-            futures["web_price"] = pool.submit(_search_web, price_q)
+        # Steam 单款游戏搜索（有游戏名就查，不只看价格）
+        if has_game_name:
+            search_name = en or cn
+            if search_name:
+                futures["steam_info"] = pool.submit(_search_steam_game, search_name)
 
-        # Steam 单款查价
-        if has_price and (cn or en):
-            futures["steam_info_cn"] = pool.submit(_search_steam_game, cn or query)
-            if en and en != cn:
-                futures["steam_info_en"] = pool.submit(_search_steam_game, en)
+        # ITAD 跨商店聚合 — 有游戏名就搜，不只看价格关键词
+        if has_price or has_game_name:
+            itad_query_text = en or cn or query
+            futures["itad"] = pool.submit(_search_itad, itad_query_text)
 
-        # ITAD 跨商店聚合（主力价格数据源）
-        if has_price:
-            futures["itad"] = pool.submit(_search_itad, query)
+        # 收集结果 — 关键源优先，Web 搜索限时 5 秒
+        FAST_TIMEOUT = 5   # Web 搜索限制 5 秒（网络受限时快速放弃）
+        SLOW_TIMEOUT = 12  # ITAD/Steam/CheapShark 多等一会
 
-        # 收集结果
         for key, fut in futures.items():
+            t = FAST_TIMEOUT if key in ("web", "web_price") else SLOW_TIMEOUT
             try:
-                val = fut.result(timeout=TIMEOUT + 3)
+                val = fut.result(timeout=t)
             except Exception:
                 val = None
 

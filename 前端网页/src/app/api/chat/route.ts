@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     if (isMockMode) {
       chatResponse = await mockCozeResponse(message.trim(), conversationId);
     } else if (CURRENT_PROVIDER === "agent") {
-      chatResponse = await sendToAgent(message.trim(), conversationId);
+      chatResponse = await sendToAgent(message.trim(), conversationId, body.fileContext);
     } else {
       chatResponse = await sendToCozeAgent(message.trim(), conversationId);
     }

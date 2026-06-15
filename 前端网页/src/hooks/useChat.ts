@@ -18,6 +18,38 @@ function generateId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
 
+/** 从回复内容提取所有情绪（按出现顺序），用于 galgame 式轮播 */
+function detectEmotionSequence(text: string): string[] {
+  if (!text) return ["neutral"];
+  const seq: string[] = [];
+  const t = text;
+
+  // 按情绪强度分块扫描（每 80 字一段）
+  const chunks = t.match(/.{1,80}/g) || [t];
+  for (const chunk of chunks) {
+    if (/[哈嘿嘻]{2,}|笑死|太[好棒强]|真不错|牛[逼批]|神作|绝了|🎉|😆|😄|😂|🤣|💖/.test(chunk)) {
+      seq.push("happy");
+    } else if (/抱抱|唉[~～]|可惜了|遗憾|心疼|😢|💔|🌧|😿|自闭/.test(chunk)) {
+      seq.push("sad");
+    } else if (/[？?]{2,}|卧槽|离谱|不是吧|震惊|还有这种|竟然|😱|😨|🤯/.test(chunk)) {
+      seq.push("surprised");
+    } else if (/❌|🚫|禁止|错误|失败|别瞎说|生气|💢|😤|垃圾|坑爹|过分|烂/.test(chunk)) {
+      seq.push("angry");
+    } else if (/哼[!！~～]|切[~～]|本小姐|老子|劳资|懂了吧|叫爸爸|叫姐姐|😏|😤|💅|傲娇/.test(chunk)) {
+      seq.push("tsundere");
+    } else if (/✨|🎮|💪|🔥|👍|💯|⭐|🌟|🏆|🍰/.test(chunk) && !seq.length) {
+      seq.push("happy");
+    }
+  }
+  return seq.length ? seq : ["neutral"];
+}
+
+/** 从回复内容推断单一情绪（兼容旧接口） */
+function detectEmotion(text: string) {
+  const seq = detectEmotionSequence(text);
+  return seq[seq.length - 1] || "neutral";
+}
+
 /** Hook 返回值 */
 export interface UseChatReturn {
   messages: Message[];
@@ -29,6 +61,8 @@ export interface UseChatReturn {
   sendMessage: (content: string) => Promise<void>;
   clearMessages: () => void;
   clearError: () => void;
+  handleFileText: (text: string, filename: string) => void;
+  handleClearFile: () => void;
 }
 
 /**
@@ -43,7 +77,17 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
   const [characterState, setCharacterState] = useState<CharacterState | null>(null);
 
   const conversationIdRef = useRef<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const fileTextRef = useRef<string>("");
+
+  /** 接收文件上传的文本 */
+  const handleFileText = useCallback((text: string, filename: string) => {
+    fileTextRef.current = `[上传文件: ${filename}]\n${text}\n[文件结束]`;
+  }, []);
+
+  /** 清除上传的文件 */
+  const handleClearFile = useCallback(() => {
+    fileTextRef.current = "";
+  }, []);
 
   /** 发送消息 */
   const sendMessage = useCallback(
@@ -54,7 +98,11 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
       // 清空之前的错误
       setError(null);
 
-      // 创建用户消息
+      // 文件文本独立传递（不显示在聊天内容中）
+      const fileContext = fileTextRef.current || undefined;
+      fileTextRef.current = "";
+
+      // 创建用户消息（只显示用户输入的文字，不显示文件内容）
       const userMessage: Message = {
         id: generateId(),
         role: "user" as MessageRole,
@@ -83,6 +131,7 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
           body: JSON.stringify({
             message: trimmed,
             conversationId: conversationIdRef.current,
+            fileContext: fileContext,
           }),
         });
 
@@ -98,8 +147,24 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
           conversationIdRef.current = data.conversationId;
         }
 
-        // 更新角色状态（扩展字段）
-        if (data.emotion) setEmotion(data.emotion);
+        // 更新角色状态 — galgame 式情绪轮播
+        if (data.emotion) {
+          setEmotion(data.emotion);
+        } else if (data.reply) {
+          const seq = detectEmotionSequence(data.reply);
+          if (seq.length === 1) {
+            setEmotion(seq[0]);
+          } else {
+            // 多情绪序列：每 3 秒切换一次
+            let i = 0;
+            setEmotion(seq[0]);
+            const timer = setInterval(() => {
+              i++;
+              if (i < seq.length) setEmotion(seq[i]);
+              else clearInterval(timer);
+            }, 3000);
+          }
+        }
         if (data.characterState) setCharacterState(data.characterState);
         else setCharacterState("speaking");
 
@@ -170,5 +235,7 @@ export function useChat(initialMessages: Message[] = []): UseChatReturn {
     sendMessage,
     clearMessages,
     clearError,
+    handleFileText,
+    handleClearFile,
   };
 }

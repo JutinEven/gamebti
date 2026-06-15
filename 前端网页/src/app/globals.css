@@ -197,13 +197,24 @@ body {
   box-shadow: 0 0 12px rgba(99, 102, 241, 0.15);
 }
 
-/* ---- 角色情绪动画预留 ---- */
-.character-idle {
-  animation: float 3s ease-in-out infinite;
+/* ---- 角色情绪自定义动画（0.3s-0.4s，快切不冲突） ---- */
+.animate-bounce { animation: bounceSm 0.35s ease-in-out; }
+.animate-shake-x { animation: shakeX 0.35s ease-in-out; }
+.animate-shake   { animation: shake  0.3s  ease-in-out; }
+.animate-sway    { animation: sway   0.8s  ease-in-out; }
+.animate-tsun    { animation: tsunTurn 0.4s ease-in-out; }
+@keyframes bounceSm {
+  0%,100%{transform:translateY(0)}30%{transform:translateY(-8px)}60%{transform:translateY(4px)}80%{transform:translateY(-2px)}
 }
-.character-happy {
-  animation: float 1.5s ease-in-out infinite;
+@keyframes shakeX {
+  0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}
 }
-.character-thinking {
-  animation: pulse-glow 2s ease-in-out infinite;
+@keyframes shake {
+  0%,100%{transform:translate(0,0)}20%{transform:translate(-3px,2px)}40%{transform:translate(3px,-2px)}60%{transform:translate(-2px,-1px)}80%{transform:translate(2px,1px)}
+}
+@keyframes sway {
+  0%,100%{transform:rotate(0deg)}25%{transform:rotate(2deg)}75%{transform:rotate(-2deg)}
+}
+@keyframes tsunTurn {
+  0%{transform:rotate(0deg)scale(1)}30%{transform:rotate(8deg)scale(1.05)}60%{transform:rotate(-4deg)scale(1.02)}100%{transform:rotate(0deg)scale(1)}
 }

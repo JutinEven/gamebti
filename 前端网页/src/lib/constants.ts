@@ -56,20 +56,21 @@ export const MESSAGE_CONFIG = {
 
 /** 角色情绪对应的提示文本 */
 export const EMOTION_LABELS: Record<string, string> = {
-  happy: "? 今天心情不错！",
-  sad: "? 有点难过...",
-  surprised: "?! 哇，这个有意思！",
-  angry: "?? 让我想想...",
-  neutral: "? 我在听呢",
-  thinking: "? 让我思考一下...",
-  excited: "? 这个我超懂！",
+  happy: "今天心情不错！",
+  sad: "有点难过...",
+  surprised: "哇，这个有意思！",
+  angry: "哼！",
+  neutral: "我在听呢",
+  thinking: "让我想想...",
+  excited: "这个我超懂！",
+  tsundere: "哼，才不是特意帮你的！",
 };
 
 /** 角色状态对应的 CSS 类 */
 export const CHARACTER_STATE_CLASSES: Record<string, string> = {
-  idle: "character-idle",
-  speaking: "character-happy",
-  thinking: "character-thinking",
-  happy: "character-happy",
+  idle: "",
+  speaking: "",
+  thinking: "",
+  happy: "",
   error: "",
 };

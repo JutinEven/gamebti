@@ -21,15 +21,17 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 import uuid
+from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Optional
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -198,6 +200,22 @@ def _format_search_results(data: dict, user_query: str = "", bilibili_data: dict
         "⚠️ 搜索数据中的日期如果早于今天，说明是旧信息，要标注「可能是历史数据」",
     ]
 
+    # 发售状态专项结果（search_release_truth — T0锁定，旧新闻不可覆盖）
+    release_truth = data.get("release_truth")
+    if release_truth:
+        rt = release_truth
+        if rt.get("released") is True:
+            conf = rt.get("confidence", "low")
+            date_info = f" 发售日期: {rt['release_date']}" if rt.get("release_date") else ""
+            lines.append(f"🚨 发售状态确认: 已正式发售 (置信度:{conf}){date_info}")
+            lines.append(f"   证据: {'; '.join(rt.get('evidence', [])[:3])}")
+            lines.append("⚠️ 以上为 T0 锁定事实。禁止用旧新闻(公告/预告/TGS)覆盖此结论。")
+        elif rt.get("released") is False:
+            lines.append(f"🚨 发售状态确认: 尚未发售 (置信度:{rt.get('confidence','low')})")
+        else:
+            lines.append("🚨 发售状态: 未知（搜索未找到官方确认）")
+            lines.append("⚠️ 不要根据训练数据或旧新闻猜测发售状态，如实告知用户未确认。")
+
     # ITAD — 主力折扣数据源（跨商店聚合）
     itad = data.get("itad")
     if itad:
@@ -210,7 +228,7 @@ def _format_search_results(data: dict, user_query: str = "", bilibili_data: dict
         # 单款游戏详情（含价格+史低）
         game = itad.get("game") or {}
         if game:
-            lines.append(f"--- ITAD: {game.get('game','')} ---")
+            lines.append(f"--- ITAD: {game.get('game','')} ✅已发售（多商店有实时售价）---")
             price_data = game.get("price") or {}
             # 史低汇总
             hl = price_data.get("history_low") or {}
@@ -241,13 +259,27 @@ def _format_search_results(data: dict, user_query: str = "", bilibili_data: dict
         for g in ss[:10]:
             lines.append(f"{g['name']} | -{g['discount_percent']}% | {g['final_price']} (原{g['original_price']})")
 
-    # Steam 单款
+    # Steam 单款 — 最优先信源（Steam 国区，完美世界 CDN，<1秒）
     si = data.get("steam_info")
     if si:
-        lines.append(f"--- {si['name']} ---")
-        lines.append(f"价格:{si['final_price']} 原价:{si['original_price']} 折扣:{si['discount_percent']}%")
+        status = "✅已发售" if si.get("is_released") else ("⏳即将推出" if si.get("coming_soon") else "")
+        lines.append(f"--- Steam官方: {si.get('name','')} {status} ---")
+        lines.append(f"价格: {si.get('final_price','?')} | 原价: {si.get('original_price','?')} | 折扣: -{si.get('discount_percent',0)}%")
+        if si.get("release_date"):
+            lines.append(f"发售日: {si['release_date']}")
+        if si.get("developers"):
+            lines.append(f"开发商: {', '.join(si['developers'][:3])}")
+        if si.get("publishers"):
+            lines.append(f"发行商: {', '.join(si['publishers'][:3])}")
+        if si.get("genres"):
+            lines.append(f"类型: {', '.join(si['genres'][:5])}")
+        if si.get("platforms"):
+            platforms = [k for k, v in si.get("platforms", {}).items() if v]
+            lines.append(f"平台: {', '.join(platforms) if platforms else 'Windows'}")
         if si.get("description"):
-            lines.append(f"简介:{si['description'][:150]}")
+            lines.append(f"简介: {si['description'][:200]}")
+        lines.append(f"Steam链接: {si.get('url','')}")
+        lines.append(f"🚨 铁证: Steam官方商店页 {si.get('url','')} 已上线，标价 {si.get('final_price','?')}，此游戏真实存在。严禁说'不存在''根本没这游戏''未官宣'！")
 
     # 网页
     web = data.get("web_results", [])
@@ -326,6 +358,49 @@ app = FastAPI(
 
 # ---- OpenAI 兼容接口 (前端使用) ----
 
+# ---- 文件上传 ----
+@app.post("/v1/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """上传文档（PDF/Word/Excel/PPT/TXT），返回提取的文本内容"""
+    # 校验扩展名
+    allowed = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv",
+               ".pptx", ".ppt", ".txt", ".md", ".json", ".html"}
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in allowed:
+        raise HTTPException(400, f"不支持的文件类型: {ext}。支持: {', '.join(sorted(allowed))}")
+
+    # 保存临时文件
+    uploads_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+    tmp_path = os.path.join(uploads_dir, f"{uuid.uuid4().hex}_{file.filename}")
+    try:
+        with open(tmp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception:
+        raise HTTPException(500, "文件保存失败")
+    finally:
+        file.file.close()
+
+    # 提取文本
+    try:
+        from tools.read_document import read_document
+        text = read_document.invoke({"file_path": tmp_path})
+        text = text if isinstance(text, str) else str(text)
+    except Exception as e:
+        os.remove(tmp_path)
+        raise HTTPException(500, f"文档解析失败: {str(e)}")
+
+    # 清理临时文件
+    os.remove(tmp_path)
+
+    return {
+        "filename": file.filename,
+        "size": len(text),
+        "text": text[:8000],  # 截断过长文本，前端会作为 chat 上下文
+        "truncated": len(text) > 8000,
+    }
+
+
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: Request):
     """
@@ -362,11 +437,95 @@ async def openai_chat_completions(request: Request):
 
     session_id = body.get("session_id") or uuid.uuid4().hex
     stream = body.get("stream", False)
+    file_context = body.get("file_context") or ""
 
-    # ---- 搜索数据注入 + 代码层拒答守卫 ----
+    # ---- 闲聊模式：非游戏意图，温暖人格，跳过搜索 ----
+    def _is_casual(text: str) -> bool:
+        t = text.strip().lower()
+        if len(t) <= 5:
+            return True
+        game_kw = ["游戏", "价格", "折扣", "版本", "角色", "更新", "发售", "攻略",
+                   "steam", "原神", "鸣潮", "方舟", "崩坏", "赛博", "黑神话", "幻兽",
+                   "法环", "elden", "怪物猎人", "只狼", "空洞", "博德", "星露谷",
+                   "DLC", "补丁", "联动", "卡池", "新角色", "多少钱", "怎么玩"]
+        if any(kw in t for kw in game_kw):
+            return False
+        casual_kw = ["你好", "嗨", "嘿", "在吗", "在干嘛", "干嘛呢", "怎么样",
+                     "最近", "今天天气", "累了", "无聊", "开心", "难过", "想你", "心情",
+                     "吃了吗", "睡了吗", "早安", "晚安", "谢谢", "再见", "拜拜",
+                     "你是谁", "你能干嘛", "你叫什么", "介绍", "聊聊天",
+                     "陪我", "讲个笑话", "唱歌", "故事", "笑话", "我爱你",
+                     "hi", "hello", "hey", "how are you", "what's up", "sup"]
+        return any(kw in t for kw in casual_kw)
+
+    _casual_result = _is_casual(user_content)
+    # 如果游戏名解析成功，肯定不是闲聊
+    from tools.game_search import _resolve_name
+    _cn, _en = _resolve_name(user_content)
+    _has_game_name = bool(_en or _cn)
+    _no_game_kw = not any(kw in user_content.lower() for kw in ["游戏", "价格", "折扣", "版本", "角色", "攻略"])
+    is_casual_chat = _casual_result and _no_game_kw and not _has_game_name
+    logger.info(f"闲聊检测: casual={_casual_result} no_game={_no_game_kw} has_name={_has_game_name} query='{user_content[:30]}'")
+
+    # 闲聊模式：直接返回温暖回复，不走搜索
+    if is_casual_chat:
+        logger.info(f"进入闲聊模式: '{user_content[:30]}'")
+        chat_prompt = (
+            "🎮 你是「Gamebti」的闲聊人格。\n"
+            "语气：损友型游戏搭子——懂行、毒舌、温暖、偶尔凡尔赛。\n"
+            "情绪表达要自然丰富：开心就哈哈哈😂，无语就离谱🤯，被夸就傲娇哼~，\n"
+            "对方说难过就认真安慰抱抱💔，对方说无聊就兴奋安利✨。\n"
+            "回复简洁（2-4句），像深夜语音连麦，不是客服不是说明书。\n"
+            "可以分享自己的糗事（\"上周单抽沉了，87抽出金你敢信？！\"）。\n"
+            "偶尔抛反问，别每句都像在交作业。\n"
+            f"📅 今天: {datetime.now().strftime('%Y年%m月%d日')}"
+        )
+        msg_list = [SystemMessage(content=chat_prompt), HumanMessage(content=user_content)]
+        # 直接调用 LLM 出闲聊回复
+        result = await service.run_messages({
+            "messages": msg_list,
+            "session_id": session_id,
+        })
+        reply_text = result.get("reply", "") if isinstance(result, dict) else str(result)
+        return {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body.get("model", "gamebti"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
+        }
+
+    # 推荐模式：不为特定游戏查询，直接走常识推荐通道
+    is_recommend_query = any(kw in user_content for kw in ["推荐", "好玩的", "有什么", "求推荐", "安利", "来点", "哪些游戏", "啥游戏", "什么游戏"])
+    if is_recommend_query and not any(kw in user_content for kw in ["价格", "多少钱", "折扣", "发售", "版本", "更新"]):
+        rec_prompt = (
+            "🎮 你是「Gamebti」——现在进入**游戏推荐模式**。\n"
+            "搜索没有数据不要紧，你的任务就是用游戏常识推荐好游戏。\n\n"
+            "## 规则\n"
+            "- 根据用户的偏好，推荐 3-5 款游戏\n"
+            "- 每条：游戏名《xxx》+ 一句话卖点 + 为什么适合对方\n"
+            "- 开头注明：\"以下基于游戏常识推荐，非实时数据：\"\n"
+            "- 不要道歉、不要说搜不到、不要拒绝——你是来做推荐的！\n"
+            "- 语气：热情的损友安利，不是官方通告\n"
+            f"📅 今天: {datetime.now().strftime('%Y年%m月%d日')}"
+        )
+        msg_list = [SystemMessage(content=rec_prompt), HumanMessage(content=user_content)]
+        result = await service.run_messages({"messages": msg_list, "session_id": session_id})
+        reply_text = result.get("reply", "") if isinstance(result, dict) else str(result)
+        return {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body.get("model", "gamebti"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
+        }
+
+    # ---- 搜索数据注入 + 代码层拒答守卫（非闲聊路径） ----
     search_system_msg = ""
     search_insufficient = False
     bilibili_data = {}
+    bilibili_url = ""
+
     try:
         from tools.game_search import game_search, _get_bilibili_space_url
         from tools.bilibili_fetch import bilibili_fetch as bf, _get_uid
@@ -396,40 +555,68 @@ async def openai_chat_completions(request: Request):
             ss = data.get("steam_specials")
             si = data.get("steam_info")
             cs = data.get("cheapshark_deals")
+            itad = data.get("itad")
 
-            has_data = any([cs, ss, si, web])
+            has_api_data = any([ss, si, cs, itad])  # 结构化数据（ITAD/Steam）
+            web_count = len(web or [])
             all_text = " ".join([
                 r.get("snippet", "") + " " + r.get("title", "") for r in (web or [])
             ])
-            # 检查是否为高风险查询类型（容易触发幻觉的资讯/版本类问题）
+
+            # 高风险查询：涉及时效性、版本、角色等容易触发 LLM 幻觉的类型
             high_risk = any(kw in user_content for kw in [
                 "最新", "版本", "角色", "更新", "新闻", "资讯", "最近",
-                "新出", "刚出", "刚刚", "今天", "这次"
+                "新出", "刚出", "刚刚", "今天", "这次", "现在", "现在有",
+                "新角色", "新干员", "新活动", "卡池", "联动", "上线",
+                "什么时候", "何时", "多久", "几号", "哪天",
+                "发布", "发售", "实装", "登场", "追加", "新增"
             ])
-            # 只有高风险 + 全是T1泛化结果 + 无实质信息 → 才拒答
+
             has_bilibili = bool(
                 bilibili_data.get("api_videos") or bilibili_data.get("ddg_results")
             )
-            only_t1_generic = (
-                high_risk and not has_bilibili and
-                web and not ss and not si and not cs and
-                all(r.get("source", "").startswith("T1") for r in web) and
-                not any(kw in all_text.lower() for kw in [
-                    "更新", "patch", "release", "news", "新闻", "新角色",
-                    "版本", "version", "update", "character", "角色",
-                    "价格", "price", "折扣", "discount", "攻略", "guide",
-                    "评测", "review", "推荐", "排行", "发售"
-                ])
-            )
 
-            if only_t1_generic:
+            # 检查网页结果是否有实质性内容
+            # 多源交叉验证 > 单一源类型判断
+            all_text = " ".join([
+                r.get("snippet", "") + " " + r.get("title", "") for r in (web or [])
+            ])
+            has_substance = any(kw in all_text.lower() for kw in [
+                "更新", "patch", "release", "news", "新闻", "新角色",
+                "版本", "version", "update", "character", "角色",
+                "价格", "price", "折扣", "discount", "攻略", "guide",
+                "评测", "review", "推荐", "排行", "发售", "上线",
+                "联动", "活动", "直播", "预告", "公告", "宣布"
+            ])
+
+            # 代码层拒答判断：数据稀疏 + 高风险 + 无API数据 + 无Bilibili官方
+            # 不再按源类型过滤 -> 社区帖子也会有真实信息（如联动活动）
+            # 改为：搜索结果总数太少(<2条) OR 完全没有实质关键词 → 才拒答
+            data_too_sparse = web_count < 2 and not has_api_data and not has_bilibili
+            no_substance_at_all = web_count > 0 and not has_substance and not has_api_data
+
+            if high_risk and (data_too_sparse or no_substance_at_all):
                 search_insufficient = True
-                logger.info(f"仅T1泛化({len(web)}条)，高危拒答: '{user_content[:50]}'")
+                logger.info(f"高风险+数据不足拒答: '{user_content[:50]}' web={web_count} substance={has_substance}")
             else:
                 search_system_msg = _format_search_results(data, user_content, bilibili_data)
     except Exception as e:
         logger.warning(f"game_search 失败: {e}")
         # 搜索异常不拒答，让 LLM 基于系统提示词处理（禁止幻觉）
+
+    # 推荐类查询例外：即使搜索无数据，也不拒答——允许 LLM 基于常识推荐（标注清楚）
+    is_recommend = any(kw in user_content for kw in ["推荐", "好玩的", "有什么", "求推荐", "安利", "介绍几个", "找几个", "来点"])
+    if is_recommend and search_insufficient:
+        search_insufficient = False
+        search_system_msg = (
+            "[推荐模式 — 搜索无数据，允许基于游戏常识推荐]\n"
+            "⚠️ 重要：本模式下\"零幻觉规则\"暂时放宽。你被允许推荐游戏。\n"
+            "根据用户的偏好，从你的游戏知识库中推荐 3-5 款好评游戏。\n"
+            "每条包含：游戏名 + 一句话卖点 + 为什么符合用户需求。\n"
+            "开头标注\"以下基于游戏常识推荐，非实时数据：\"\n"
+            "不要说\"搜索不到\"\"不能推荐\"\"没有数据\"——你是来做推荐的，不是来道歉的。\n"
+            f"📅 今天: {datetime.now().strftime('%Y年%m月%d日')}\n"
+        )
 
     # 代码层拒答：数据不足时直接返回，不调用 LLM
     if search_insufficient:
@@ -453,12 +640,13 @@ async def openai_chat_completions(request: Request):
             }],
         }
 
-    # 构建消息列表
+    # 构建消息列表（游戏查询模式）
     msg_list = []
-    # 追加 Bilibili 官方号链接（如适用）
+    # 文件上下文注入（前端上传的文档内容）
+    if file_context:
+        msg_list.append(SystemMessage(content=f"[用户上传的文档内容 — 基于此回答，不要对此内容做搜索]\n{file_context}"))
     if bilibili_url:
         search_system_msg += f"\n📺 官方B站动态: {bilibili_url}"
-
     if search_system_msg:
         msg_list.append(SystemMessage(content=search_system_msg))
     msg_list.append(HumanMessage(content=user_content))

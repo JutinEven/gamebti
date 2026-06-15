@@ -22,6 +22,8 @@ interface ChatWindowProps {
   onSend: (message: string) => void;
   onClear: () => void;
   onClearError: () => void;
+  onFileText?: (text: string, filename: string) => void;
+  onClearFile?: () => void;
 }
 
 export default function ChatWindow({
@@ -33,6 +35,8 @@ export default function ChatWindow({
   onSend,
   onClear,
   onClearError,
+  onFileText,
+  onClearFile,
 }: ChatWindowProps) {
   return (
     <div className="flex h-full flex-col sm:flex-row">
@@ -138,7 +142,7 @@ export default function ChatWindow({
         <MessageList messages={messages} />
 
         {/* 输入框 */}
-        <InputBox onSend={onSend} disabled={isSending} />
+        <InputBox onSend={onSend} disabled={isSending} onFileText={onFileText} onClearFile={onClearFile} />
       </div>
     </div>
   );

@@ -39,7 +39,8 @@ export type Emotion =
   | "angry"
   | "neutral"
   | "thinking"
-  | "excited";
+  | "excited"
+  | "tsundere";
 
 /** 角色动作 */
 export type Action =

@@ -37,6 +37,8 @@ export default function ChatPage() {
     sendMessage,
     clearMessages,
     clearError,
+    handleFileText,
+    handleClearFile,
   } = useChat(initialMessages);
 
   return (
@@ -55,6 +57,8 @@ export default function ChatPage() {
           onSend={sendMessage}
           onClear={clearMessages}
           onClearError={clearError}
+          onFileText={handleFileText}
+          onClearFile={handleClearFile}
         />
       </div>
 
