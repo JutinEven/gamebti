@@ -169,7 +169,10 @@
       "Bash(git commit -m 'v2.0: Docker support, file upload, emotion system, Steam priority search *)",
       "Bash(git push *)",
       "Bash(chmod +x \"D:/AAA-各类文档及模板/作业暂置处-大二/下学期/Agent知识库语料/Agent-Gamebti/start.sh\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git rm *)",
+      "Bash(git remote *)",
+      "Bash(ssh-keygen -t ed25519 -C \"justineven@github.com\" -f ~/.ssh/id_ed25519 -N \"\")"
     ]
   }
 }
