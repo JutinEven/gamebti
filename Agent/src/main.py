@@ -365,11 +365,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 静态前端（如果存在）
+# 静态前端目录
 import os as _os
 _FE_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "fe")
-if _os.path.isdir(_FE_DIR):
-    app.mount("/", StaticFiles(directory=_FE_DIR, html=True), name="frontend")
 
 
 # ---- OpenAI 兼容接口 (前端使用) ----
@@ -776,6 +774,24 @@ async def health_check():
         "service": "Gamebti Agent v1.0.0",
         "framework": "LangGraph + FastAPI",
     }
+
+
+# 兜底：静态前端（在所有 API 路由之后，只处理 GET）
+from fastapi.responses import FileResponse as _FileResponse
+from fastapi import Response as _Response
+@app.api_route("/{full_path:path}", methods=["GET"])
+async def serve_frontend(full_path: str):
+    if _os.path.isdir(_FE_DIR):
+        from pathlib import Path as _Path
+        fp = _Path(_FE_DIR) / full_path
+        if fp.is_file():
+            return _FileResponse(str(fp))
+        # SPA fallback: /chat → /chat/index.html, / → /index.html
+        if (fp / "index.html").is_file():
+            return _FileResponse(str(fp / "index.html"))
+        if (_Path(_FE_DIR) / "index.html").is_file():
+            return _FileResponse(str(_Path(_FE_DIR) / "index.html"))
+    return _Response("Not Found", status_code=404)
 
 
 # ---- 命令行入口 ----
