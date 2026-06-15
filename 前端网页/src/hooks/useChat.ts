@@ -20,34 +20,34 @@ function generateId(): string {
 
 /** 从回复内容提取所有情绪（按出现顺序），用于 galgame 式轮播 */
 function detectEmotionSequence(text: string): Emotion[] {
-  if (!text) return ["neutral"];
-  const seq: string[] = [];
+  if (!text) return ["neutral"] as Emotion[];
+  const seq: Emotion[] = [];
   const t = text;
 
   // 按情绪强度分块扫描（每 80 字一段）
   const chunks = t.match(/.{1,80}/g) || [t];
   for (const chunk of chunks) {
     if (/[哈嘿嘻]{2,}|笑死|太[好棒强]|真不错|牛[逼批]|神作|绝了|🎉|😆|😄|😂|🤣|💖/.test(chunk)) {
-      seq.push("happy");
+      seq.push("happy" as Emotion);
     } else if (/抱抱|唉[~～]|可惜了|遗憾|心疼|😢|💔|🌧|😿|自闭/.test(chunk)) {
-      seq.push("sad");
+      seq.push("sad" as Emotion);
     } else if (/[？?]{2,}|卧槽|离谱|不是吧|震惊|还有这种|竟然|😱|😨|🤯/.test(chunk)) {
-      seq.push("surprised");
+      seq.push("surprised" as Emotion);
     } else if (/❌|🚫|禁止|错误|失败|别瞎说|生气|💢|😤|垃圾|坑爹|过分|烂/.test(chunk)) {
-      seq.push("angry");
+      seq.push("angry" as Emotion);
     } else if (/哼[!！~～]|切[~～]|本小姐|老子|劳资|懂了吧|叫爸爸|叫姐姐|😏|😤|💅|傲娇/.test(chunk)) {
-      seq.push("tsundere");
+      seq.push("tsundere" as Emotion);
     } else if (/✨|🎮|💪|🔥|👍|💯|⭐|🌟|🏆|🍰/.test(chunk) && !seq.length) {
-      seq.push("happy");
+      seq.push("happy" as Emotion);
     }
   }
-  return seq.length ? seq : ["neutral"];
+  return seq.length ? seq : ["neutral" as Emotion];
 }
 
 /** 从回复内容推断单一情绪（兼容旧接口） */
-function detectEmotion(text: string) {
+function detectEmotion(text: string): Emotion {
   const seq = detectEmotionSequence(text);
-  return seq[seq.length - 1] || "neutral";
+  return seq[seq.length - 1] || ("neutral" as Emotion);
 }
 
 /** Hook 返回值 */
