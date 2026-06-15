@@ -54,7 +54,6 @@ final*.txt
 hallucination_test.txt
 result.txt
 node20/
-image/
 *_test.txt
 sts*.txt
 start-servers.sh
@@ -66,4 +65,3 @@ tunnel-watchdog.sh
 deepseek_sts2.txt
 st1.txt
 st2.txt
-前端网页/public/images/*.png
