@@ -41,7 +41,7 @@ function detectEmotionSequence(text: string): Emotion[] {
       seq.push("happy" as Emotion);
     }
   }
-  return seq.length ? seq : ["neutral" as Emotion];
+  return seq.length ? seq : (["neutral"] as Emotion[]);
 }
 
 /** 从回复内容推断单一情绪（兼容旧接口） */
