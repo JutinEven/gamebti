@@ -431,6 +431,18 @@ import os as _os
 _FE_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "fe")
 
 
+# ---- 诊断：查看环境变量 ----
+@app.get("/v1/debug/env")
+async def debug_env():
+    return {
+        "LLM_PROVIDER": os.getenv("LLM_PROVIDER", "NOT-SET"),
+        "LLM_API_KEY_set": bool(os.getenv("LLM_API_KEY", "")),
+        "LLM_API_KEY_len": len(os.getenv("LLM_API_KEY", "")),
+        "LLM_API_KEY_prefix": os.getenv("LLM_API_KEY", "")[:8] if os.getenv("LLM_API_KEY") else "EMPTY",
+        "LLM_MODEL": os.getenv("LLM_MODEL", "NOT-SET"),
+        "all_env_keys": [k for k in os.environ if "LLM" in k or "ITAD" in k or "DEEPSEEK" in k],
+    }
+
 # ---- 诊断端点：直接测试 DeepSeek API ----
 @app.post("/v1/debug/deepseek")
 async def debug_deepseek(request: Request):
