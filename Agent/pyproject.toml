@@ -34,13 +34,11 @@ dependencies = [
     "rich>=14,<15",
     "chardet>=5.2,<6",
     "python-multipart>=0.0.32",
+    "steamgamedata>=1.1.0",
 ]
 
 [tool.uv]
-# 使用阿里云镜像作为默认源，替代 pypi.org
-[[tool.uv.index]]
-url = "https://mirrors.aliyun.com/pypi/simple/"
-default = true
+# 使用官方 PyPI（Railway 到阿里云镜像不通）
 
 [dependency-groups]
 dev = [

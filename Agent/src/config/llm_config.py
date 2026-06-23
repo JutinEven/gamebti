@@ -111,7 +111,7 @@ def get_llm() -> ChatOpenAI:
         base_url=cfg["base_url"],
         temperature=cfg["temperature"],
         max_tokens=cfg["max_tokens"],
-        streaming=True,
+        streaming=False,
         timeout=120,
     )
 

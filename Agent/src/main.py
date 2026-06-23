@@ -53,6 +53,16 @@ logger = logging.getLogger("gamebti")
 TIMEOUT_SECONDS = 300  # 5 分钟超时
 
 
+def _safe_str(s: str) -> str:
+    """清洗字符串中的无效 Unicode 字符，防止 JSON 序列化崩溃"""
+    if not isinstance(s, str):
+        return str(s)
+    try:
+        return s.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+    except Exception:
+        return s.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
 class GraphService:
     """Agent 图服务 — 管理编译后的 LangGraph Agent"""
 
@@ -96,12 +106,25 @@ class GraphService:
             logger.debug(f"清理旧搜索数据跳过: {e}")
 
         # 注入新消息并执行
-        result = await graph.ainvoke({"messages": list(messages)}, config=config)
+        try:
+            result = await graph.ainvoke({"messages": list(messages)}, config=config)
+        except Exception as e:
+            logger.error(f"graph.ainvoke 异常: {type(e).__name__}: {e}", exc_info=True)
+            raise
         reply = ""
-        for msg in reversed(result.get("messages", [])):
+        all_msgs = result.get("messages", [])
+        for msg in reversed(all_msgs):
             if isinstance(msg, AIMessage) and msg.content:
                 reply = msg.content
                 break
+        if not reply:
+            for msg in reversed(all_msgs):
+                content = getattr(msg, 'content', None) or ''
+                if content and isinstance(content, str) and content.strip():
+                    reply = content.strip()
+                    break
+        # 清洗无效 Unicode，防止 JSON 序列化崩溃
+        reply = _safe_str(reply)
         return {"reply": reply, "result": result}
 
     async def run(self, payload: dict) -> dict:
@@ -119,6 +142,9 @@ class GraphService:
             return {"reply": result["reply"], "session_id": session_id, "run_id": run_id}
         except asyncio.CancelledError:
             return {"error": "执行被取消", "run_id": run_id}
+        except Exception as e:
+            logger.error(f"Agent 执行异常: {type(e).__name__}: {e}", exc_info=True)
+            return {"error": f"{type(e).__name__}: {str(e)}", "run_id": run_id}
 
     async def run_messages(self, payload: dict) -> dict:
         """消息列表执行 — 支持 SystemMessage 搜索注入，不污染对话历史"""
@@ -133,6 +159,9 @@ class GraphService:
             return {"reply": result["reply"], "session_id": session_id, "run_id": run_id}
         except asyncio.CancelledError:
             return {"error": "执行被取消", "run_id": run_id}
+        except Exception as e:
+            logger.error(f"Agent 执行异常: {type(e).__name__}: {e}", exc_info=True)
+            return {"error": f"{type(e).__name__}: {str(e)}", "run_id": run_id}
 
     async def stream_sse(self, payload: dict) -> AsyncGenerator[str, None]:
         """SSE 流式（兼容旧版）"""
@@ -350,11 +379,19 @@ async def lifespan(app: FastAPI):
     logger.info("Gamebti Agent 服务关闭")
 
 
+# 自定义 JSON 响应类：强制 ensure_ascii=True 避免 Unicode 序列化问题
+from starlette.responses import JSONResponse as _JSONResponse
+class SafeJSONResponse(_JSONResponse):
+    def render(self, content) -> bytes:
+        import json
+        return json.dumps(content, ensure_ascii=True, default=str).encode("utf-8")
+
 app = FastAPI(
     title="Gamebti Agent",
     description="独立游戏智能助手 — LangGraph + 免费 LLM",
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=SafeJSONResponse,
 )
 
 # CORS
@@ -365,10 +402,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- 全局异常捕获中间件 ----
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class UnicodeSafetyMiddleware(BaseHTTPMiddleware):
+    """捕获所有未处理异常，确保返回合法 UTF-8 JSON"""
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except UnicodeDecodeError as e:
+            logger.error(f"UnicodeDecodeError 捕获: {e}", exc_info=True)
+            return SafeJSONResponse(
+                status_code=500,
+                content={"error": f"EncodingError: {str(e)}"},
+            )
+        except Exception as e:
+            logger.error(f"未处理异常: {type(e).__name__}: {e}", exc_info=True)
+            return SafeJSONResponse(
+                status_code=500,
+                content={"error": f"{type(e).__name__}: {_safe_str(str(e))}"},
+            )
+
+app.add_middleware(UnicodeSafetyMiddleware)
+
 # 静态前端目录
 import os as _os
 _FE_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "fe")
 
+
+# ---- 诊断端点：直接测试 DeepSeek API ----
+@app.post("/v1/debug/deepseek")
+async def debug_deepseek(request: Request):
+    """直接调用 DeepSeek API 并返回原始响应"""
+    import httpx as _httpx
+    body = await request.json()
+    user_msg = body.get("message", "hello")
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.getenv("LLM_MODEL", "deepseek-chat"),
+                    "messages": [{"role": "user", "content": user_msg}],
+                    "max_tokens": 100,
+                },
+            )
+            raw_text = resp.text
+            # 检查编码
+            encoding = resp.encoding or "unknown"
+            content_type = resp.headers.get("content-type", "unknown")
+            return {
+                "status_code": resp.status_code,
+                "encoding": encoding,
+                "content_type": content_type,
+                "text_len": len(raw_text),
+                "text_preview": raw_text[:500],
+                "text_is_valid_utf8": raw_text.encode("utf-8", errors="replace").decode("utf-8") == raw_text if isinstance(raw_text, str) else None,
+            }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)}"}
 
 # ---- OpenAI 兼容接口 (前端使用) ----
 
@@ -449,6 +546,8 @@ async def openai_chat_completions(request: Request):
     if not user_content:
         raise HTTPException(status_code=400, detail="未找到用户消息")
 
+    # 清洗用户输入中的无效 Unicode 字符
+    user_content = _safe_str(user_content)
     session_id = body.get("session_id") or uuid.uuid4().hex
     stream = body.get("stream", False)
     file_context = body.get("file_context") or ""
@@ -481,26 +580,46 @@ async def openai_chat_completions(request: Request):
     is_casual_chat = _casual_result and _no_game_kw and not _has_game_name
     logger.info(f"闲聊检测: casual={_casual_result} no_game={_no_game_kw} has_name={_has_game_name} query='{user_content[:30]}'")
 
-    # 闲聊模式：直接返回温暖回复，不走搜索
+    # 闲聊模式：绕过 langchain，直接用 httpx 调用 DeepSeek 避免编码问题 (v2-httpx)
     if is_casual_chat:
         logger.info(f"进入闲聊模式: '{user_content[:30]}'")
         chat_prompt = (
-            "🎮 你是「Gamebti」的闲聊人格。\n"
-            "语气：损友型游戏搭子——懂行、毒舌、温暖、偶尔凡尔赛。\n"
-            "情绪表达要自然丰富：开心就哈哈哈😂，无语就离谱🤯，被夸就傲娇哼~，\n"
-            "对方说难过就认真安慰抱抱💔，对方说无聊就兴奋安利✨。\n"
-            "回复简洁（2-4句），像深夜语音连麦，不是客服不是说明书。\n"
-            "可以分享自己的糗事（\"上周单抽沉了，87抽出金你敢信？！\"）。\n"
-            "偶尔抛反问，别每句都像在交作业。\n"
-            f"📅 今天: {datetime.now().strftime('%Y年%m月%d日')}"
+            "You are Gamebti, a game assistant. Be concise and friendly. "
+            f"Today: {datetime.now().strftime('%Y-%m-%d')}"
         )
-        msg_list = [SystemMessage(content=chat_prompt), HumanMessage(content=user_content)]
-        # 直接调用 LLM 出闲聊回复
-        result = await service.run_messages({
-            "messages": msg_list,
-            "session_id": session_id,
-        })
-        reply_text = result.get("reply", "") if isinstance(result, dict) else str(result)
+        # 直接用 httpx 调用 DeepSeek API，绕过 langchain
+        reply_text = ""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://api.deepseek.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": os.getenv("LLM_MODEL", "deepseek-chat"),
+                        "messages": [
+                            {"role": "system", "content": chat_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "max_tokens": 800,
+                        "temperature": 0.7,
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    reply_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    # 确保使用 resp.text 已经是正确解码的
+                    logger.info(f"httpx 直接调用成功: len={len(reply_text)}")
+                else:
+                    logger.error(f"DeepSeek API 返回错误: {resp.status_code} {resp.text[:200]}")
+                    reply_text = f"API 错误 ({resp.status_code})"
+        except Exception as e:
+            logger.error(f"httpx 调用失败: {type(e).__name__}: {e}", exc_info=True)
+            reply_text = f"调用失败: {str(e)}"
+
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
@@ -525,6 +644,8 @@ async def openai_chat_completions(request: Request):
         )
         msg_list = [SystemMessage(content=rec_prompt), HumanMessage(content=user_content)]
         result = await service.run_messages({"messages": msg_list, "session_id": session_id})
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
         reply_text = result.get("reply", "") if isinstance(result, dict) else str(result)
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -771,7 +892,7 @@ async def health_check():
     """健康检查端点"""
     return {
         "status": "ok",
-        "service": "Gamebti Agent v1.0.0",
+        "service": "Gamebti Agent v1.0.1-httpx",
         "framework": "LangGraph + FastAPI",
     }
 
